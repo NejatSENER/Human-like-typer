@@ -1,0 +1,605 @@
+# MarketNest — General Marketplace Platform
+
+## What the App Does & Who It's For
+
+MarketNest is a multi-vendor marketplace where independent sellers list products across any category and buyers discover, compare, and purchase them. Think Amazon meets Etsy — broad category coverage, seller storefronts, buyer reviews, and a robust checkout flow. The platform earns revenue through a per-sale commission (configurable per category) and optional promoted listing fees.
+
+Three parties interact simultaneously: buyers who browse and purchase; sellers who manage storefronts, inventory, and orders; and admins who moderate listings, manage disputes, configure commission rates, and view platform analytics.
+
+## User Roles
+
+Guest:
+- Browse all published listings, search, filter, sort
+- View product detail pages and seller profiles
+- Cannot add to cart, wishlist, or checkout
+- Sees a "Sign in to purchase" prompt on cart/checkout attempt
+
+Buyer (authenticated):
+- All guest capabilities
+- Add to cart and wishlist
+- Complete checkout (guest checkout not supported — account required for order history)
+- Track orders, request returns, leave reviews
+- Manage saved addresses and payment methods
+- Cannot list products
+
+Seller (authenticated, separate role from buyer — but one account can hold both):
+- All buyer capabilities
+- Access to seller dashboard: create/edit/delete listings, manage orders, view analytics
+- Upload product images, set prices, manage inventory
+- Configure store profile (banner, bio, policies)
+- Respond to buyer reviews and messages
+- Withdraw earnings (Stripe Connect payouts)
+- Cannot access other sellers' dashboards or admin tools
+
+Admin:
+- Full platform access
+- Approve, reject, or remove any listing
+- Suspend or ban any user account
+- Configure global settings: commission rates per category, featured slots, homepage curation
+- Manage disputes between buyers and sellers
+- View platform analytics: GMV, orders, top sellers, top categories, refund rate
+
+## 3. Authentication & Sessions
+
+**Methods:** Email + password for all roles. Google OAuth for buyers. No social login for sellers (to enforce business account verification). Apple Sign In available for buyers on mobile web.
+
+**Buyer signup flow:**
+1. User clicks "Sign Up" → modal slides up (translateY(20px)→0, 250ms ease-out)
+2. Fields: full name, email, password (min 8 chars, 1 number, 1 uppercase), newsletter opt-in
+3. POST `/api/auth/register` — creates account with role `buyer`, sends verification email
+4. Unverified buyers can browse and add to cart but not checkout. Banner: "Verify your email to place orders."
+5. Verification link expires 48 hours. Resend option available.
+
+**Seller onboarding (separate flow from buyer signup):**
+1. Existing buyer clicks "Start Selling" in account menu → navigated to `/seller/apply`
+2. Step 1 — Store details: store name (unique, validated in real-time), store description, category focus (multi-select), country
+3. Step 2 — Identity verification: legal name, date of birth, business type (Individual / LLC / Corporation), tax ID (optional, required for payouts above threshold)
+4. Step 3 — Payout setup: Stripe Connect onboarding (embedded Stripe flow)
+5. On completion: seller role added to existing account, seller dashboard unlocked. Email confirmation sent.
+6. Admin review not required — auto-approved after Stripe Connect verification.
+
+**Sessions:** JWT in httpOnly cookie, 14-day expiry for buyers/sellers (with silent refresh token), 8-hour for admins. Rate limiting: 10 failed login attempts → 20-minute lockout.
+
+**Password reset:** Forgot-password email flow, token expires 1 hour, no email enumeration (same UI response whether account exists or not).
+
+## Core Features as User Flows
+
+Homepage
+
+**Hero banner:** Full-width, 480px tall. Admin-configurable: background image, headline, subheadline, CTA button (text + link). Auto-rotates between up to 5 banners (8-second interval, crossfade 500ms). Dot indicators at the bottom. Manual prev/next arrows on hover.
+
+**Category grid:** Below the hero — a 4×2 grid of category tiles (8 visible, "See all categories" link reveals the rest). Each tile: icon, category name, product count. Clicking navigates to `/category/:slug`.
+
+**Featured products:** A "Staff Picks" row — 5 horizontally scrollable product cards, curated by admin. Each card: product image (square, 240×240px), title (2 lines max), seller name, star rating + review count, price. "Add to Cart" button appears on card hover.
+
+**Flash sale section:** If any products have active sale prices, a countdown-timer section appears showing hours/minutes/seconds until the sale ends. 3–4 product cards below the timer.
+
+**Trending now:** Algorithmically ranked — top products by purchase velocity in the last 48 hours. Horizontally scrollable row of cards.
+
+**New arrivals:** Products listed in the last 7 days, sorted by newest. Horizontally scrollable row.
+
+**Category spotlights:** Two full-width editorial bands — each showing a category name, a short tagline, and 3 product cards, with a "Shop [Category]" CTA link.
+
+Product Listing & Search
+
+**Search bar (persistent in navbar):** Clicking or typing opens a search overlay. As the user types (debounced 300ms), real-time suggestions appear: top matching product titles (5 items), top matching categories (3 items), top matching sellers (2 items). Pressing Enter or clicking "See all results" navigates to `/search?q=...`.
+
+**Search results page:**
+- Left sidebar filters (260px):
+  - Category tree (collapsible, chevron rotate 200ms)
+  - Price range: dual-handle slider, min/max inputs below
+  - Rating: minimum star filter (star row — click sets minimum, teal fill)
+  - Condition: New / Used / Refurbished checkboxes
+  - Seller location: country dropdown
+  - Free shipping toggle
+  - On sale toggle
+  - "Apply" button + "Reset all" link
+- Main area: results count, sort dropdown (Relevance / Newest / Price: Low–High / Price: High–Low / Best Rated / Most Sold), grid/list view toggle
+- Product grid: 4-column on desktop (248px cards), 3-column on tablet, 2-column on mobile, 12px gap
+- Each card: product image (1:1 ratio, object-fit cover), condition badge (New/Used), sale badge if discounted (red "−N%"), title (2 lines, ellipsis), seller name + verified badge, star rating, review count, price (sale price in red, original price struck through if applicable), "Add to Cart" button (slides up from bottom of card on hover, 150ms)
+- Pagination: 24 results per page, numbered pagination at bottom
+- No results state: "No results for '[query]'" + spelling suggestion + "Browse all products" CTA
+
+Product Detail Page
+
+**URL:** `/product/:slug`
+
+**Layout:** Left: image gallery (560px wide). Right: product info panel (flex-1).
+
+**Image gallery:**
+- Main image: 560×560px, rounded corners. Clicking opens a lightbox modal (full-screen, dark overlay, prev/next arrows, keyboard navigable)
+- Thumbnail strip below: 5 thumbnails (72×72px each), clicking swaps the main image with a crossfade (200ms)
+- Zoom on hover: a loupe-style magnified view in a 240×240px floating panel at the cursor position
+
+**Product info panel:**
+- Breadcrumb: Home › Category › Subcategory › Product title
+- Condition badge + seller name (link to seller profile) + verified badge
+- Product title (24px bold)
+- Rating row: filled stars, average rating (e.g. "4.7"), review count link (scrolls to reviews section)
+- Price: primary price in 32px bold. If on sale: sale price in red, original struck through, discount percentage badge
+- Variant selectors: if the product has variants (size, color, material), each rendered as a row of clickable swatches. Active swatch: colored border + checkmark. Color swatches: circular 32px. Size swatches: rectangular pills. Selecting a variant may update price and availability
+- Stock indicator: "In stock (N left)" in green if ≤10 remaining, "In stock" if more, "Out of stock" (button disabled, "Notify me" link instead)
+- Quantity stepper: − / number input / + (min 1, max stock quantity or 10 per order)
+- "Add to Cart" button: full-width, teal, 48px. Clicking triggers: button text changes to "✓ Added!" for 1.5 seconds, cart icon in navbar bounces (scale 1→1.2→1, 300ms), mini cart drawer slides in from the right showing the updated cart
+- "Add to Wishlist" button: outlined, heart icon. Fills on click
+- Shipping estimate: based on buyer's saved address (or country from IP). "Ships in 3–5 business days to [Country]"
+- Seller info card: avatar, store name, average rating, follower count, "Visit Store" button, "Message Seller" button
+
+**Tabs below the fold:** Description | Specifications | Reviews | Shipping & Returns
+
+**Description tab:** Rich text content uploaded by seller. Can include images.
+
+**Specifications tab:** Key-value table of technical specs (e.g. Weight, Dimensions, Material, SKU).
+
+**Reviews tab:**
+- Summary: average rating, star distribution bar chart (5→1 stars, teal bars), "Write a Review" button (only visible to buyers who purchased this product)
+- Review list: sorted by Most Helpful (default). Each review: avatar, display name, star rating, review title, body text, "Helpful" upvote button (count shown), verified purchase badge, date. Images shown if uploaded by reviewer (clickable thumbnails)
+- Review form (for verified buyers): star selector (click to rate, stars fill on hover), title input, body textarea (min 50 chars), image upload (up to 5 photos), submit button
+
+**Shipping & Returns tab:** Seller's configured shipping policy and return policy (plain text).
+
+Shopping Cart
+
+**URL:** `/cart`
+
+**Mini cart drawer:** Slides in from the right (translateX(100%)→0, 280ms cubic-bezier(0.32,0.72,0,1)) when a product is added. Shows up to 3 recent items, total, and "View Cart" + "Checkout" CTA buttons.
+
+**Full cart page:**
+- Left (flex-1): list of cart items grouped by seller. Each seller group has a header (seller name, store avatar). Each item row: product image (80×80px), title, variant info, unit price, quantity stepper (− / number / +), line total, "Remove" link
+- Changing quantity: immediate optimistic UI update, PATCH `/api/cart/:itemId` debounced 500ms
+- Right sidebar (360px, sticky): Order Summary card — subtotal, shipping estimate (calculated by destination, select if not set), estimated tax, total. "Proceed to Checkout" button. Below: accepted payment icons, "Secure checkout" trust badge
+- Promo code input: text field + "Apply" button. Valid code reduces total inline (200ms fade-in on discount line)
+- Empty cart: illustration + "Your cart is empty. Start shopping!" + featured products row below
+
+Checkout Flow
+
+**Multi-step flow at `/checkout`:**
+
+**Step 1 — Shipping Address:**
+- Saved addresses shown as selectable cards. "Add new address" expands a form (full name, address line 1, address line 2, city, state/province, postal code, country — all validated)
+- "Use billing address as shipping" toggle
+- "Continue" advances to Step 2
+
+**Step 2 — Shipping Method:**
+- Per-seller shipping options shown (Standard / Express / Overnight) with estimated delivery dates and prices
+- Selecting a method updates the order summary total in real-time
+- "Continue" advances to Step 3
+
+**Step 3 — Payment:**
+- Saved payment methods shown as selectable cards (masked card number, expiry, card brand icon)
+- "Add new card" opens Stripe Elements embedded form (card number, expiry, CVC, billing ZIP)
+- Order summary shown on the right. Final total including all shipping and taxes.
+- "Place Order" button → POST `/api/orders` — creates order, charges via Stripe, sends confirmation email to buyer and notification to each seller. Redirects to `/order-confirmation/:orderId`
+
+**Order Confirmation page:** Order number, summary of items, estimated delivery dates, "Continue Shopping" and "View Order" buttons. Confirmation email sent with same info.
+
+4.6 Buyer Dashboard
+
+**URL:** `/account`
+
+Tabs: Orders | Wishlist | Reviews | Addresses | Payment Methods | Settings
+
+**Orders tab:** Table of all orders sorted by date. Columns: Order #, Date, Items (thumbnail stack), Total, Status (badge: Processing / Shipped / Delivered / Cancelled / Return Requested). Clicking a row opens the order detail page: full item list, per-item status, tracking number (link to carrier), "Request Return" button (within 30 days of delivery), "Leave Review" button (per item, only after delivery).
+
+**Wishlist tab:** Grid of saved products (same card style as search results). "Add to Cart" button on each card. "Remove from Wishlist" on hover (✕ button). Empty state: "Nothing saved yet. Click ♡ on any product."
+
+**Reviews tab:** List of reviews the buyer has written. Each row: product thumbnail, title, stars, date, review excerpt. "Edit" and "Delete" links.
+
+**Addresses tab:** Saved addresses as cards. "Edit", "Delete", "Set as default" per card. "Add Address" button.
+
+**Payment Methods tab:** Saved cards (masked). "Remove" per card. "Add new card" opens Stripe Elements.
+
+**Settings tab:** Edit display name, email (requires re-verification), password, notification preferences (email toggles for: order updates, promotions, seller messages, price drops on wishlisted items).
+
+Seller Dashboard
+
+**URL:** `/seller`
+
+Sidebar: Overview | Listings | Orders | Analytics | Messages | Payouts | Store Settings
+
+**Overview:** 4 KPI tiles — Revenue This Month, Orders This Month, Avg Order Value, Pending Shipments. Below: a 30-day revenue line chart. Recent orders table (5 rows, link to full orders list).
+
+**Listings management:** Table of all seller's products. Columns: Image, Title, Category, Price, Stock, Status (Active / Draft / Paused / Rejected), Views, Sales. "New Listing" button. Filter by status. Search by title.
+
+**New/Edit Listing form:**
+1. Title (required, max 120 chars), Description (rich text editor), Category (cascading dropdown — selecting parent loads child categories), Condition (dropdown)
+2. Variants: toggle "This product has variants" → adds a variant builder. Seller defines attribute names (e.g. "Color", "Size"), then adds values per attribute. The system generates a variant matrix — seller sets price and stock per combination.
+3. Pricing: base price (number input with currency selector), sale price (optional — if set, shows discount %), compare-at price (for reference), tax category
+4. Inventory: SKU (optional), stock quantity per variant (or single quantity), "Allow backorders" toggle
+5. Shipping: weight + dimensions (for shipping rate calculation), fulfillment time (dropdown: 1 day / 1–3 days / 3–5 days / 7+ days)
+6. Images: drag-and-drop upload zone, up to 10 images, min 800×800px. Drag to reorder. First image is the main image.
+7. SEO: meta title, meta description (optional, auto-generated if empty)
+8. Status: Draft (save without publishing) or Active (publish immediately)
+9. "Save" button: validates, saves. If Active: listing becomes searchable within 5 minutes.
+
+**Orders management:** Table with filters: All / Pending / Shipped / Delivered / Cancelled. Each row: order ID, buyer name (anonymized to first name + last initial), item(s), total, date, status, "Mark as Shipped" button (opens a modal to enter tracking number + carrier). Clicking a row opens order detail.
+
+**Analytics:** Date range picker. Charts: revenue over time (line), orders over time (line), top 5 products by revenue (horizontal bar chart), traffic sources (donut: Direct, Search, Social, Referral). Table: per-product performance (views, add-to-cart rate, conversion rate, revenue).
+
+**Payouts:** Balance card (available for payout, pending). Payout history table: date, amount, status (Paid / Pending / Failed). "Request Payout" button (triggers Stripe Connect transfer to linked bank account, min $10). Earnings breakdown: gross sales, platform commission, net earnings.
+
+**Store Settings:** Store name, store URL slug, banner image (upload, 1440×320px recommended), store logo, bio (rich text), return policy (textarea), shipping policy (textarea), social links (Instagram, TikTok, website).
+
+Admin Panel
+
+**URL:** `/admin`
+
+**Dashboard:** Platform stats — GMV today/week/month/year, total orders, active sellers, active buyers, new registrations, refund rate. Two charts: daily GMV line chart (30 days), orders by category pie chart.
+
+**Listings moderation:** Queue of listings flagged by the system (keyword filters) or buyers. Each item: product title, seller, flag reason, "Approve" / "Remove" / "Warn Seller" actions. Bulk actions available.
+
+**Users:** Searchable table. Filter by role, status, join date. Actions: suspend (time-limited with reason), ban (permanent), force-verify email, downgrade seller to buyer.
+
+**Disputes:** List of open disputes between buyers and sellers (from return requests that escalated). Each dispute: order ID, buyer, seller, issue description, messages thread, admin decision panel (refund buyer / release funds to seller / split).
+
+**Commission settings:** Per-category commission rate (percentage). Global default rate. Changes apply to all new orders in that category.
+
+**Homepage curation:** Drag-and-drop interface to configure: hero banner slots (image upload + text + CTA), staff picks (search + add products to featured slot), category spotlights (pick 2 categories + taglines).
+
+## Data Model
+
+User:
+  id: uuid (PK)
+  email: string (unique)
+  password_hash: string | null
+  full_name: string
+  avatar_url: string | null
+  roles: enum[] [buyer, seller, admin]  -- array, one account can be buyer+seller
+  email_verified: boolean (default: false)
+  oauth_provider: enum [google, apple] | null
+  oauth_id: string | null
+  active: boolean (default: true)
+  created_at: timestamp
+
+
+SellerProfile:
+  id: uuid (PK)
+  user_id: uuid (FK → User, 1:1)
+  store_name: string (unique)
+  store_slug: string (unique)
+  bio: text | null
+  banner_url: string | null
+  logo_url: string | null
+  return_policy: text | null
+  shipping_policy: text | null
+  stripe_account_id: string | null
+  stripe_onboarding_complete: boolean (default: false)
+  avg_rating: decimal (cached)
+  total_sales: int (cached)
+  follower_count: int (cached)
+  status: enum [pending, active, suspended]
+  created_at: timestamp
+
+
+Category:
+  id: uuid (PK)
+  name: string
+  slug: string (unique)
+  parent_id: uuid | null (FK → Category)
+  icon_url: string | null
+  commission_rate: decimal | null  -- overrides global if set
+  display_order: int
+  active: boolean
+
+
+Product:
+  id: uuid (PK)
+  seller_id: uuid (FK → SellerProfile)
+  category_id: uuid (FK → Category)
+  title: string
+  slug: string (unique)
+  description: text
+  condition: enum [new, used, refurbished]
+  base_price: decimal
+  sale_price: decimal | null
+  compare_at_price: decimal | null
+  tax_category: string | null
+  weight_grams: int | null
+  dimensions_cm: jsonb | null  -- {length, width, height}
+  fulfillment_days: int
+  has_variants: boolean (default: false)
+  total_stock: int (cached)
+  view_count: int (default: 0)
+  sales_count: int (default: 0)
+  avg_rating: decimal (cached)
+  review_count: int (cached)
+  status: enum [draft, active, paused, rejected]
+  meta_title: string | null
+  meta_description: string | null
+  created_at: timestamp
+  updated_at: timestamp
+
+
+ProductImage:
+  id: uuid (PK)
+  product_id: uuid (FK → Product)
+  url: string
+  position: int
+  alt_text: string | null
+
+
+ProductVariant:
+  id: uuid (PK)
+  product_id: uuid (FK → Product)
+  attributes: jsonb  -- e.g. {"Color": "Red", "Size": "M"}
+  sku: string | null
+  price: decimal  -- overrides base_price if set
+  stock: int (default: 0)
+  active: boolean (default: true)
+
+
+Cart:
+  id: uuid (PK)
+  user_id: uuid (FK → User, 1:1)
+  updated_at: timestamp
+
+
+CartItem:
+  id: uuid (PK)
+  cart_id: uuid (FK → Cart)
+  product_id: uuid (FK → Product)
+  variant_id: uuid | null (FK → ProductVariant)
+  quantity: int
+  added_at: timestamp
+
+
+Address:
+  id: uuid (PK)
+  user_id: uuid (FK → User)
+  full_name: string
+  line1: string
+  line2: string | null
+  city: string
+  state: string | null
+  postal_code: string
+  country: string (ISO 3166-1 alpha-2)
+  is_default: boolean (default: false)
+
+
+Order:
+  id: uuid (PK)
+  reference: string (unique, e.g. "MN-2025-09821")
+  buyer_id: uuid (FK → User)
+  shipping_address_id: uuid (FK → Address)
+  subtotal: decimal
+  shipping_total: decimal
+  tax_total: decimal
+  discount_total: decimal
+  grand_total: decimal
+  promo_code: string | null
+  stripe_payment_intent_id: string
+  status: enum [pending, paid, cancelled, refunded]
+  created_at: timestamp
+
+
+OrderItem:
+  id: uuid (PK)
+  order_id: uuid (FK → Order)
+  seller_id: uuid (FK → SellerProfile)
+  product_id: uuid (FK → Product)
+  variant_id: uuid | null (FK → ProductVariant)
+  quantity: int
+  unit_price: decimal
+  shipping_method: string
+  shipping_cost: decimal
+  tracking_number: string | null
+  carrier: string | null
+  status: enum [processing, shipped, delivered, cancelled, return_requested, returned]
+  commission_rate: decimal  -- snapshot at time of purchase
+  seller_net: decimal  -- unit_price * quantity * (1 - commission_rate) - shipping_cost
+  delivered_at: timestamp | null
+  updated_at: timestamp
+
+
+Review:
+  id: uuid (PK)
+  product_id: uuid (FK → Product)
+  buyer_id: uuid (FK → User)
+  order_item_id: uuid (FK → OrderItem)  -- ensures only verified buyers can review
+  rating: int (1–5)
+  title: string
+  body: text
+  helpful_count: int (default: 0)
+  status: enum [pending, approved, removed]
+  created_at: timestamp
+
+
+ReviewImage:
+  id: uuid (PK)
+  review_id: uuid (FK → Review)
+  url: string
+  position: int
+
+
+Wishlist:
+  user_id: uuid (FK → User)
+  product_id: uuid (FK → Product)
+  added_at: timestamp
+  PRIMARY KEY (user_id, product_id)
+
+
+PromoCode:
+  id: uuid (PK)
+  code: string (unique)
+  type: enum [percentage, fixed_amount, free_shipping]
+  value: decimal
+  min_order_amount: decimal | null
+  max_uses: int | null
+  uses_count: int (default: 0)
+  active: boolean
+  expires_at: timestamp | null
+
+
+Dispute:
+  id: uuid (PK)
+  order_item_id: uuid (FK → OrderItem)
+  buyer_id: uuid (FK → User)
+  seller_id: uuid (FK → SellerProfile)
+  reason: text
+  status: enum [open, resolved_buyer, resolved_seller, resolved_split]
+  admin_notes: text | null
+  created_at: timestamp
+  resolved_at: timestamp | null
+
+
+Relationships:
+- User 1:1 SellerProfile (if seller role)
+- User 1:1 Cart
+- User 1:M Address
+- User 1:M Order (as buyer)
+- SellerProfile 1:M Product
+- Product 1:M ProductImage
+- Product 1:M ProductVariant
+- Product 1:M Review
+- Cart 1:M CartItem
+- Order 1:M OrderItem
+- OrderItem 1:1 Review (optional, verified buyer only)
+- User M:M Product (via Wishlist)
+
+## API Design
+
+Auth
+POST   /api/auth/register
+POST   /api/auth/login
+POST   /api/auth/logout
+GET    /api/auth/verify/:token
+POST   /api/auth/forgot-password
+PATCH  /api/auth/reset-password
+POST   /api/auth/google
+
+Products
+GET    /api/products                 (public — paginated, filterable)
+GET    /api/products/:slug           (public)
+GET    /api/products/search?q=       (public)
+GET    /api/products/trending        (public)
+GET    /api/products/new-arrivals    (public)
+POST   /api/products/:id/view        (public — increments view_count, deduped by IP)
+
+Categories
+GET    /api/categories               (public, tree structure)
+GET    /api/categories/:slug/products (public, paginated)
+
+Reviews
+GET    /api/products/:id/reviews     (public, paginated, sortable)
+POST   /api/products/:id/reviews     (buyer auth, verified purchase only)
+PATCH  /api/reviews/:id              (buyer auth, own review only)
+DELETE /api/reviews/:id              (buyer or admin)
+POST   /api/reviews/:id/helpful      (buyer auth)
+
+Cart
+GET    /api/cart                     (buyer auth)
+POST   /api/cart/items               (buyer auth)
+PATCH  /api/cart/items/:id           (buyer auth)
+DELETE /api/cart/items/:id           (buyer auth)
+DELETE /api/cart                     (buyer auth — clear cart)
+
+Wishlist
+GET    /api/wishlist                 (buyer auth)
+POST   /api/wishlist/:productId      (buyer auth)
+DELETE /api/wishlist/:productId      (buyer auth)
+
+Checkout
+POST   /api/checkout/shipping-rates  (buyer auth — calculate rates)
+POST   /api/checkout/validate-promo  (buyer auth)
+POST   /api/orders                   (buyer auth — create order + charge)
+POST   /api/payments/webhook         (Stripe webhook)
+
+Orders (buyer)
+GET    /api/orders                   (buyer auth — own orders)
+GET    /api/orders/:id               (buyer auth — own order only)
+POST   /api/orders/:itemId/return    (buyer auth)
+
+Orders (seller)
+GET    /api/seller/orders            (seller auth)
+GET    /api/seller/orders/:id        (seller auth — own orders only)
+PATCH  /api/seller/orders/:itemId/ship (seller auth — add tracking)
+
+Addresses
+GET    /api/addresses                (buyer auth)
+POST   /api/addresses                (buyer auth)
+PATCH  /api/addresses/:id            (buyer auth)
+DELETE /api/addresses/:id            (buyer auth)
+
+Seller
+POST   /api/seller/apply             (buyer auth — begin seller onboarding)
+GET    /api/seller/me                (seller auth)
+PATCH  /api/seller/me                (seller auth — store settings)
+GET    /api/seller/analytics         (seller auth)
+GET    /api/seller/payouts           (seller auth)
+POST   /api/seller/payouts/request   (seller auth)
+
+Seller listings
+GET    /api/seller/products          (seller auth — own products)
+POST   /api/seller/products          (seller auth)
+PATCH  /api/seller/products/:id      (seller auth)
+DELETE /api/seller/products/:id      (seller auth — soft delete)
+
+Seller profiles (public)
+GET    /api/sellers/:slug            (public)
+GET    /api/sellers/:slug/products   (public, paginated)
+
+Admin
+GET    /api/admin/stats              (admin)
+GET    /api/admin/products?status=   (admin — moderation queue)
+PATCH  /api/admin/products/:id       (admin — approve/reject)
+GET    /api/admin/users              (admin)
+PATCH  /api/admin/users/:id          (admin)
+GET    /api/admin/disputes           (admin)
+PATCH  /api/admin/disputes/:id       (admin — resolve)
+GET    /api/admin/categories         (admin)
+PATCH  /api/admin/categories/:id     (admin — commission rate)
+PATCH  /api/admin/homepage           (admin — curated content)
+
+## Search, Filter & Sort
+
+**Full-text search:** On `Product.title`, `Product.description`, `SellerProfile.store_name`. PostgreSQL `tsvector` with GIN index. Results ranked by: text relevance × recency boost × sales velocity boost.
+
+**Filters:** Category (tree, multi-select), price range (min/max), condition, avg_rating (minimum), free shipping (boolean), on sale (boolean), seller country, in-stock only.
+
+**Sort options:** Relevance (default on search), Newest, Price Low→High, Price High→Low, Best Rated (avg_rating desc), Most Sold (sales_count desc).
+
+**Category pages:** Default sort: Most Sold. All filters available.
+
+## Real-Time Features
+
+**Cart sync:** Cart state stored server-side. If buyer is logged in on two devices, both see the same cart. Updates via PATCH debounced 500ms.
+
+**Stock reservation:** When a buyer places an order, stock is decremented immediately. If payment fails, stock is restored within 15 minutes via a background job.
+
+**Order status push:** Sellers marking an order as "Shipped" triggers an immediate email to the buyer. No WebSocket needed — email + buyer polling on the orders page every 60 seconds updates the status badge.
+
+**Flash sale countdown:** Timer on the homepage is client-side, counting down to the sale end timestamp returned from the API. No SSE required.
+
+**Price drop alerts:** If a wishlisted product's price drops, a background job (run nightly) sends email notifications to all users who have wishlisted it.
+
+## Error Handling & Empty States
+
+**Empty states:**
+- Cart empty: illustration + "Your cart is empty." + "Start Shopping" CTA + recommended products row
+- No search results: "No results for '[query]'." + spelling suggestions + "Browse categories" CTA
+- No orders yet: "You haven't placed any orders yet." + "Start Shopping" CTA
+- Seller no listings: "You haven't listed any products yet." + "Create your first listing" CTA
+- Wishlist empty: "Nothing saved yet. Click ♡ on any product you love."
+
+**Error handling:**
+- Out of stock on checkout: inline error on cart item — "Sorry, [Product] is out of stock. Please remove it to continue." Remove button highlighted.
+- Payment failure: Stripe error mapped to user-friendly message below card form. Order not created. Cart preserved.
+- Product removed by admin: in cart, item shows "This item is no longer available." with remove link.
+- 401 on protected route: redirect to `/login?redirect=[path]`
+- 404: custom branded page with search bar + featured products below
+- 500: "Something went wrong. Please try again." with retry button. Cart state preserved in localStorage as fallback.
+
+**Toast notifications (top-right, 3s auto-dismiss):**
+- Green: "Added to cart", "Item saved to wishlist", "Order placed!", "Review submitted"
+- Amber: "Promo code applied — saving $N"
+- Red: "Out of stock", "Payment failed", "Couldn't save item"
+
+## 10. Payments
+
+**Stripe integration:**
+- Buyers: Stripe PaymentIntent created server-side at checkout, card charged via Stripe Elements on the frontend
+- Sellers: Stripe Connect (Express accounts). Platform collects full payment from buyer, then transfers `seller_net` to seller's Stripe account after a 7-day holding period (fraud protection)
+- Commission: deducted automatically at transfer time. Configurable per category in admin
+- Refunds: admin or seller can trigger full/partial refund via Stripe API. Refunded amount deducted from seller's pending balance
+- Payouts: seller requests payout → Stripe Connect transfer to linked bank account. Minimum payout $10. Processing time 2–3 business days
+- Webhooks: `payment_intent.succeeded`, `payment_intent.payment_failed`, `transfer.paid`, `account.updated` (Stripe Connect status changes)
